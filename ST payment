@@ -1,0 +1,244 @@
+<?php
+
+/**
+ * Plugin Name: ST Payment for WooCommerce
+ * Plugin URI: https://sidra.salla-shop.com/
+ * Author: Moaaz Elsharkawy
+ * Author URI: https://sidra.salla-shop.com/
+ * Description: This plugin allows for payments with ST Coin.
+ * Version: 0.1.0
+ * License: GPL-2.0-or-later
+ * License URI: http://www.gnu.org/licenses/gpl-2.0.txt
+ */
+
+if (!defined('ABSPATH')) {
+    exit; // Exit if accessed directly
+}
+
+// Adding ST payment gateway
+add_filter('woocommerce_payment_gateways', 'add_to_woo_st_payment_gateway');
+
+function add_to_woo_st_payment_gateway($gateways)
+{
+    $gateways[] = 'WC_ST_Payment_Gateway';
+    return $gateways;
+}
+
+if (!class_exists('WC_ST_Payment_Gateway')) {
+
+    add_action('plugins_loaded', 'st_payment_init', 11);
+
+    function st_payment_init()
+    {
+        class WC_ST_Payment_Gateway extends WC_Payment_Gateway
+        {
+            public function __construct()
+            {
+                $this->id                 = 'st_payment';
+                $this->icon = apply_filters('woocommerce_st_icon', 'https://salla-shop.com/wp-content/uploads/2024/08/salla-miner-labs-200-x-50-بيكسل-1.png');
+                $this->has_fields         = false;
+                $this->method_title       = __('ST Payment Gateway', 'st-pay-woo');
+                $this->method_description = __('Payment processing with ST Coin.', 'st-pay-woo');
+
+                $this->title        = $this->get_option('title');
+                $this->description  = $this->get_option('description');
+                $this->instructions = __('Please send %s ST Coin using the copy button below.', 'st-pay-woo') . '<br><strong></strong><br>' . __('Once done, please enter the transaction hash and click confirm.', 'st-pay-woo');
+                $this->init_form_fields();
+                $this->init_settings();
+                add_action('woocommerce_update_options_payment_gateways_' . $this->id, array($this, 'process_admin_options'));
+            }
+
+            public function init_form_fields()
+            {
+                $this->form_fields = array(
+                    'enabled'     => array(
+                        'title'       => __('Enable/Disable', 'st-pay-woo'),
+                        'label'       => __('Enable ST Payment Gateway', 'st-pay-woo'),
+                        'type'        => 'checkbox',
+                        'description' => '',
+                        'default'     => 'no',
+                    ),
+                    'title'       => array(
+                        'title'       => __('Title', 'st-pay-woo'),
+                        'type'        => 'text',
+                        'description' => __('Title shown during checkout.', 'st-pay-woo'),
+                        'default'     => 'ST Payment',
+                        'desc_tip'    => true,
+                    ),
+                    'description' => array(
+                        'title'       => __('Description', 'st-pay-woo'),
+                        'type'        => 'textarea',
+                        'description' => __('Description shown during checkout.', 'st-pay-woo'),
+                        'default'     => 'Pay with ST Coin through our secure gateway.',
+                    ),
+                    'address'     => array(
+                        'title' => __('Wallet Address', 'st-pay-woo'),
+                        'type'  => 'text',
+                    ),
+                );
+            }
+
+            public function payment_fields()
+            {
+                if ($this->description) {
+                    echo wpautop(wptexturize($this->description));
+                }
+
+                // Get the order total and multiply it by 5
+                $multiplied_total = $this->get_order_total() * 5;
+
+                // Display instructions with the multiplied total, with colored text
+                echo '<p>' . sprintf($this->instructions, '<span style="color: #FF4500; font-weight: bold;">' . $multiplied_total . ' ST</span>', $this->get_option('address')) . '</p>';
+
+                // Custom CSS for rounded input fields
+                echo '<style>
+                    .custom-input {
+                        border-radius: 15px;
+                        background-color: #ffffff;
+                        border: 1px solid #d1d1d1;
+                        padding: 10px;
+                        width: 100%;
+                        box-sizing: border-box;
+                        font-size: 16px;
+                        margin-bottom: 15px;
+                    }
+                </style>';
+
+                // Display input field for transaction ID with custom styles
+
+echo '<input type="text" name="st_txid" class="custom-input" placeholder="' . __('Transaction Hash', 'st-pay-woo') . '" />';
+echo '<input type="text" name="st_wallet_address" class="custom-input" placeholder="' . __('Your Wallet Address', 'st-pay-woo') . '" />';
+
+
+                // Get the wallet address
+                $wallet_address = esc_attr($this->get_option('address'));
+
+                // Display copy button for wallet address (without displaying the address field)
+                echo '<div class="input-group">';
+                echo '<input type="text" id="walletAddress" class="form-control" value="' . $wallet_address . '" readonly style="display: none;">';
+                echo '<div class="input-group-append">';
+                echo '<button class="btn btn-outline-secondary" type="button" onclick="copyAddress(\'' . $wallet_address . '\')" style="background-color: #987436; color: #wheat; border-color: #FFD700; border-radius: 10px; padding: 5px 7px;">Copy Wallet Address</button>';
+                echo '</div>';
+                echo '</div>';
+
+                // JavaScript function to copy the wallet address and display SweetAlert
+                echo '<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>';
+                echo '<script>
+                    function copyAddress(walletAddress) {
+                        var addressField = document.createElement("input");
+                        addressField.setAttribute("type", "text");
+                        addressField.setAttribute("value", walletAddress);
+                        document.body.appendChild(addressField);
+                        addressField.select();
+                        document.execCommand("copy");
+                        document.body.removeChild(addressField);
+                        
+                        // Display SweetAlert message
+                        Swal.fire({
+                            title: "Wallet Address Copied",
+                            text: "The wallet address has been copied successfully!",
+                            icon: "success",
+                            confirmButtonText: "OK"
+                        });
+                    }
+                </script>';
+            }
+
+            public function validate_fields()
+{
+    if (empty($_POST['st_txid'])) {
+        wc_add_notice(__('Transaction Hash مطلوب!', 'st-pay-woo'), 'error');
+        return false;
+    }
+
+    if (empty($_POST['st_wallet_address'])) {
+        wc_add_notice(__('Wallet Address مطلوب!', 'st-pay-woo'), 'error');
+        return false;
+    }
+
+    // تحقق مما إذا كان معرف المعاملة قد استخدم بالفعل
+    if (get_posts(array('post_type' => 'shop_order', 'meta_key' => 'st_txid', 'meta_value' => $_POST['st_txid'], 'post_status' => 'any'))) {
+        wc_add_notice(__('هذه المعاملة تخص طلبًا سابقًا', 'st-pay-woo'), 'error');
+        return false;
+    }
+
+    return true;
+}
+
+
+            public function process_payment($order_id)
+{
+    $txid = sanitize_text_field($_POST['st_txid']);
+    
+    // تحقق مما إذا كان معرف المعاملة قد استخدم بالفعل في طلب سابق
+    if ($existing_order_id = $this->get_order_id_by_transaction_hash($txid)) {
+        wc_add_notice(__('معرف المعاملة قد استخدم في طلب سابق.', 'st-pay-woo'), 'error');
+        return false;
+    }
+
+    // اتصل بشبكة TON باستخدام cURL
+    $curl = curl_init();
+    $api_url = 'https://tonapi.io/v2/blockchain/transactions/';
+    $request_url = "{$api_url}{$txid}";
+
+    curl_setopt($curl, CURLOPT_URL, $request_url);
+    curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($curl, CURLOPT_TIMEOUT, 30);
+
+    $response = curl_exec($curl);
+    if (curl_errno($curl)) {
+        wc_add_notice(__('فشل في الاتصال بشبكة TON.', 'st-pay-woo'), 'error');
+        error_log('cURL Error: ' . curl_error($curl)); // سجل خطأ cURL
+        curl_close($curl);
+        return false;
+    }
+
+    $response_data = json_decode($response);
+    if ($response_data === null) {
+        wc_add_notice(__('فشل في تحليل استجابة الشبكة.', 'st-pay-woo'), 'error');
+        error_log('JSON Decode Error: ' . json_last_error_msg()); // سجل خطأ تحليل JSON
+        curl_close($curl);
+        return false;
+    }
+
+    $response_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+    if ($response_code !== 200) {
+        wc_add_notice(__('فشل التحقق من المعاملة مع شبكة TON. رمز الحالة: ' . $response_code, 'st-pay-woo'), 'error');
+        curl_close($curl);
+        return false;
+    }
+
+    curl_close($curl);
+
+    // حفظ معرف المعاملة كحقل ميتا في الطلب
+    $order = wc_get_order($order_id);
+    $order->update_meta_data('st_txid', $txid);
+    $order->save();
+
+    // نجاح الدفع، تحديد حالة الطلب كـ "قيد الانتظار" (أو "مكتمل")
+    $order->update_status('on-hold', __('انتظار دفع ST Coin', 'st-pay-woo'));
+    $order->reduce_order_stock();
+
+    // إفراغ السلة
+    WC()->cart->empty_cart();
+
+    // إعادة التوجيه إلى صفحة الشكر
+    return array(
+        'result'   => 'success',
+        'redirect' => $this->get_return_url($order)
+    );
+}
+
+            /**
+             * Function to get order ID by transaction hash
+             */
+            private function get_order_id_by_transaction_hash($txid)
+            {
+                global $wpdb;
+                $query = "SELECT post_id FROM $wpdb->postmeta WHERE meta_key = 'st_txid' AND meta_value = %s";
+                $order_id = $wpdb->get_var($wpdb->prepare($query, $txid));
+                return $order_id;
+            }
+        }
+    }
+}
